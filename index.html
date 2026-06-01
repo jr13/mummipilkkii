@@ -327,14 +327,8 @@ function spawnParts(fish) {
 
 // ─── Game flow ────────────────────────────────────────────────────────────────
 function startGame(name) {
-  G = { phase:'COUNTDOWN', countdown:3, timeLeft:GTIME, tick:0, nid:1,
-        fish: Array.from({length:12},()=>null).map(()=>{ G={nid:1,fish:[]}; const f=mkFish(); G=null; return f; }),
-        player: mkPlayer(name), pts:[] };
-
-  // Re-init fish properly
-  G.nid=1; G.fish=[];
+  G = { phase:'COUNTDOWN', countdown:3, timeLeft:GTIME, tick:0, nid:1, fish:[], player:null, pts:[] };
   G.player = mkPlayer(name);
-  G.pts=[];
   for (let i=0;i<12;i++) G.fish.push(mkFish());
 
   showScreen('game');
@@ -368,7 +362,7 @@ addEventListener('resize', resize); resize();
 function shakeIt() {
   let n=8;
   const iv=setInterval(()=>{
-    shakeOff={(x:(Math.random()-.5)*12, y:(Math.random()-.5)*12)};
+    shakeOff={x:(Math.random()-.5)*12, y:(Math.random()-.5)*12};
     if(--n<=0){clearInterval(iv);shakeOff={x:0,y:0};}
   },40);
 }
@@ -627,14 +621,28 @@ canvas.addEventListener('pointerup',  ()=>{ if(Date.now()-pDownAt<220){clearTime
 canvas.addEventListener('pointercancel',()=>{ clearTimeout(jigHold); setJig(false); });
 
 // ─── Device motion ────────────────────────────────────────────────────────────
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+// Update button text to reflect platform
+el('btn-motion').textContent = isIOS
+  ? '📱 Salli liikesensori (iOS)'
+  : '📳 Salli liikesensori (Android)';
+
 el('btn-motion').addEventListener('click',async()=>{
   if(typeof DeviceMotionEvent?.requestPermission==='function'){
+    // iOS Safari: requires explicit user permission
     try{ if(await DeviceMotionEvent.requestPermission()==='granted') enableMotion(); }catch{}
-  } else enableMotion();
+  } else {
+    // Android ja muut: ei tarvita lupaa, käynnistetään suoraan
+    enableMotion();
+  }
 });
 function enableMotion(){
   motionOn=true; el('btn-motion').textContent='✅ Liikesensori päällä';
 }
+// Android: liikesensori käytössä automaattisesti ilman erillistä lupaa
+if(!isIOS && typeof DeviceMotionEvent!=='undefined'){ enableMotion(); }
+
 addEventListener('devicemotion',e=>{
   if(!motionOn||!G||G.phase!=='PLAYING') return;
   const a=e.accelerationIncludingGravity; if(!a) return;
@@ -665,7 +673,9 @@ function buildGameOver(){
   }
 }
 
-el('btn-start').addEventListener('click',()=>{
+el('btn-start').addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  el('inp-name').blur();
   const name=el('inp-name').value.trim()||'Kalastaja';
   startGame(name);
 });
