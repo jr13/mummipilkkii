@@ -73,6 +73,16 @@ canvas{display:block;touch-action:none}
 .cb-reel:active{background:rgba(40,180,90,.95)}
 .cb-jig{width:56px;height:56px;background:rgba(90,55,8,.9);border-color:#ca5;font-size:.78rem;font-weight:800}
 .cb-jig.on{background:rgba(180,130,10,.95);border-color:#ffd700}
+/* Map button (top-left corner) */
+#cb-mapbtn{
+  position:fixed;top:env(safe-area-inset-top,8px);left:8px;
+  width:44px;height:44px;border-radius:12px;
+  border:2px solid rgba(255,255,255,.22);background:rgba(10,28,70,.85);
+  color:#fff;font-size:1.3rem;z-index:60;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  -webkit-tap-highlight-color:transparent;
+}
+#cb-mapbtn:active{background:rgba(30,80,180,.92);border-color:#6af}
 /* Alerts */
 .al{
   position:fixed;top:44%;left:50%;
@@ -87,9 +97,9 @@ canvas{display:block;touch-action:none}
 /* Bite alert: clickable, no pointer-events:none */
 #al-bite{
   border:2px solid #ffd700;color:#ffd700;font-size:1.2rem;top:40%;
-  pointer-events:auto;cursor:pointer;
+  pointer-events:none;cursor:pointer;
 }
-#al-bite.on{animation:pulse .35s infinite alternate}
+#al-bite.on{animation:pulse .35s infinite alternate;pointer-events:auto}
 .al-hooked{border:2px solid #44ff99;color:#44ff99;top:38%}
 .al-danger{border:2px solid #ff4444;color:#ff4444}
 .al-catch {border:2px solid #88aaff;color:#88aaff;top:28%}
@@ -117,8 +127,9 @@ canvas{display:block;touch-action:none}
     <button id="btn-solo"    class="btn btn-ghost">🎣 Pelaa yksin</button>
     <button id="btn-motion"  class="btn btn-ghost" style="margin-top:16px;font-size:.82rem">📱 Salli liikesensori</button>
     <p class="hint">
+      <b>Pelipaikka:</b> valitse pilkkipaikka kartalta · vaihda 🗺️-kuvakkeesta · kalaa parhaiten syvänteen reunoilta ja matalikoilta<br>
       <b>Mobiili:</b> napauta ISKEE-tekstiä = isku · pidä ruutua = jigg · heiluta = jigg<br>
-      <b>Näppäimistö:</b> ↑↓ syvyys · J jigg · R kelaa · Välilyönti isku
+      <b>Näppäimistö:</b> ↑↓ syvyys · J jigg · R kelaa · Välilyönti isku · M kartta
     </p>
   </div>
 </div>
@@ -162,6 +173,7 @@ canvas{display:block;touch-action:none}
 <!-- ── GAME ── -->
 <div id="screen-game" class="screen">
   <canvas id="c"></canvas>
+  <button id="cb-mapbtn" aria-label="Vaihda pilkkipaikkaa">🗺️</button>
   <div id="al-bite"   class="al">🐟 ISKEE — TEE VASTAISKU!</div>
   <div id="al-hooked" class="al al-hooked"></div>
   <div id="al-danger" class="al al-danger">💔 Siima katkesi!</div>
@@ -232,13 +244,108 @@ const snd={
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+// dz = preferred depth band as fraction of bottom depth; w = base spawn weight.
 const FISH_DEFS=[
-  {type:'ahven', name:'Ahven', minW:.05,maxW:.50,speed:1.5,resistMax:.45,color:'#c87840'},
-  {type:'hauki', name:'Hauki', minW:.60,maxW:3.5, speed:.8, resistMax:.82,color:'#4a7a2a'},
-  {type:'lahna', name:'Lahna', minW:.30,maxW:1.8, speed:.7, resistMax:.60,color:'#c8a050'},
-  {type:'taimen',name:'Taimen',minW:1.5, maxW:6.0, speed:1.0,resistMax:.95,color:'#e07030'},
+  {type:'ahven', name:'Ahven', minW:.05,maxW:.55,speed:1.5,resistMax:.45,color:'#c87840', dz:[.45,.97], w:5},
+  {type:'lahna', name:'Lahna', minW:.30,maxW:1.9, speed:.7, resistMax:.62,color:'#c8a050', dz:[.70,1.0], w:3},
+  {type:'hauki', name:'Hauki', minW:.60,maxW:3.8, speed:.8, resistMax:.84,color:'#4a7a2a', dz:[.30,.85], w:2},
+  {type:'taimen',name:'Taimen',minW:1.5, maxW:6.0, speed:1.0,resistMax:.95,color:'#e07030', dz:[.40,.90], w:1},
 ];
 const TICK=50, GTIME=5*60*1000;
+const LUREX=200;                      // fixed horizontal centre of own water column (0..400)
+
+// ─── Lake bathymetry (deterministic — identical on host/non-host/solo) ──────────
+const ASPECT=1.24;                    // map width / height (chart ~1180×950)
+// type: 'island' (land), 'shoal' (submerged hump = prime), 'basin' (deep hole)
+const FEATURES=[
+  {t:'island',x:0.605,y:0.225,r:0.052,name:'Syynisaari'},
+  {t:'island',x:0.665,y:0.165,r:0.022},
+  {t:'island',x:0.715,y:0.330,r:0.040,name:'Viitasaari'},
+  {t:'island',x:0.700,y:0.430,r:0.016},
+  {t:'island',x:0.730,y:0.505,r:0.030,name:'Luhtasaari'},
+  {t:'island',x:0.905,y:0.140,r:0.040,name:'Aaponsaari'},
+  {t:'island',x:0.992,y:0.460,r:0.030,name:'Rapusaari'},
+  {t:'island',x:0.405,y:0.660,r:0.030,name:'Koiralahdensaaret'},
+  {t:'island',x:0.455,y:0.705,r:0.018},
+  {t:'island',x:0.370,y:0.620,r:0.015},
+  {t:'island',x:0.770,y:0.720,r:0.030,name:'Leukakivensaaret'},
+  {t:'island',x:0.835,y:0.760,r:0.022},
+  {t:'island',x:0.725,y:0.690,r:0.016},
+  {t:'island',x:0.870,y:0.705,r:0.014},
+  {t:'basin', x:0.800,y:0.200,r:0.150,depth:24,name:'Syynisaarenselkä'},
+  {t:'basin', x:0.870,y:0.430,r:0.130,depth:21,name:'Viitasaarenselkä'},
+  {t:'basin', x:0.560,y:0.810,r:0.120,depth:15},
+  {t:'basin', x:0.300,y:0.470,r:0.090,depth:11},
+  {t:'shoal', x:0.455,y:0.455,r:0.070,depth:3.5}, // keskiselän "6"-penkka
+  {t:'shoal', x:0.545,y:0.300,r:0.045,depth:5},
+  {t:'shoal', x:0.520,y:0.585,r:0.050,depth:5},
+  {t:'shoal', x:0.660,y:0.620,r:0.040,depth:4},
+  {t:'shoal', x:0.830,y:0.560,r:0.045,depth:6},
+  {t:'shoal', x:0.620,y:0.430,r:0.035,depth:5.5},
+];
+// Decorative depth numbers (chart-style), drawn on the map.
+const LABELS=[
+  {x:0.785,y:0.180,t:'24'},{x:0.865,y:0.405,t:'21'},{x:0.560,y:0.800,t:'13.8'},
+  {x:0.300,y:0.500,t:'11'},{x:0.275,y:0.455,t:'8.4'},{x:0.455,y:0.450,t:'6'},
+];
+
+function clamp(v,a,b){return v<a?a:v>b?b:v}
+function smooth(e0,e1,x){const t=clamp((x-e0)/(e1-e0),0,1);return t*t*(3-2*t)}
+function gauss(d2,r){return Math.exp(-d2/(r*r))}
+
+function shoreX(ny){
+  let s=0.115+0.028*Math.sin(ny*7.0+0.6);
+  s-=0.055*gauss((ny-0.35)*(ny-0.35),0.06);   // Maijalahti
+  s-=0.060*gauss((ny-0.80)*(ny-0.80),0.07);   // Koiralahti
+  s+=0.030*gauss((ny-0.56)*(ny-0.56),0.025);  // Kuivassalmi-niemi
+  return s;
+}
+// Depth in metres at normalised (nx,ny). <0 = land.
+function depthAt(nx,ny){
+  let d=9+8*clamp(0.55*nx+0.45*(0.78-ny)+0.18,0,1);
+  for(const f of FEATURES){
+    const dx=(nx-f.x)*ASPECT, dy=ny-f.y, w=gauss(dx*dx+dy*dy,f.r);
+    if(w<0.002) continue;
+    const target=f.t==='island'?-3.0:f.depth;
+    if(f.t==='basin'){ if(target>d) d+=(target-d)*w; }
+    else { if(target<d) d+=(target-d)*w; }
+  }
+  const tt=shoreX(ny)-nx, landW=smooth(-0.055,0.015,tt);
+  d+=(-3.0-d)*landW;                                            // mantere + ranta
+  const bl=gauss((nx-0.16)*(nx-0.16)*ASPECT*ASPECT+(ny-0.95)*(ny-0.95),0.16);
+  d+=(-3.0-d)*Math.min(1,bl*1.2);                              // Koiralahdenpellot
+  return d;
+}
+// Fishing quality 0..1: drop-off steepness + sweet-spot depth, penalise shallow/flat.
+function qualityAt(nx,ny){
+  const d=depthAt(nx,ny);
+  if(d<1.3) return 0;
+  const e=0.004;
+  const grad=Math.sqrt(((depthAt(nx+e,ny)-depthAt(nx-e,ny))/(2*e))**2
+                      +((depthAt(nx,ny+e)-depthAt(nx,ny-e))/(2*e))**2);
+  const qEdge=smooth(8,70,grad), qDepth=Math.exp(-((d-6)/5)**2);
+  let q=0.10+0.72*qEdge+0.26*qDepth;
+  q*=smooth(1.3,3.0,d);
+  if(d>17) q*=0.7;
+  return clamp(q,0,1);
+}
+function nFishFor(q){return Math.round(3+q*8)}            // 3 (heikko) .. 11 (priimaa)
+function qualityWord(q){return q>=.75?'Erinomainen':q>=.55?'Hyvä':q>=.35?'Kohtalainen':'Heikko'}
+function qcolor(q){return q>=.55?'#7ddc8a':q>=.35?'#e8c860':'#e08a5a'}
+// Weighted species pick, biased by depth & quality.
+function pickSpeciesDef(bottom,q){
+  const ws=FISH_DEFS.map(d=>{
+    let w=d.w;
+    if(d.type==='ahven') w*=(bottom<7?1.5:1.0);
+    if(d.type==='lahna') w*=(bottom>5?1.2:0.6);
+    if(d.type==='hauki') w*=(0.7+q*1.0);
+    if(d.type==='taimen')w*=(0.2+(bottom/22)*1.7)*(0.5+q);
+    return Math.max(.02,w);
+  });
+  let r=Math.random()*ws.reduce((a,b)=>a+b,0);
+  for(let i=0;i<FISH_DEFS.length;i++){ r-=ws[i]; if(r<=0) return FISH_DEFS[i]; }
+  return FISH_DEFS[0];
+}
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let G=null, myPid=null, roomId=null, amHost=false;
@@ -246,7 +353,13 @@ let tickTimer=null, rafId=null;
 let shakeOff={x:0,y:0}, motionOn=false, shakeHist=[], depthInt=null;
 const alTimers={};
 let fbUnlisten=null;      // function to detach Firebase listener
-let prevMySt='FISHING';   // track my state for non-host alert logic
+let mapOpen=false;        // map-overlay (spot selection) shown?
+let mapCache=null;        // cached offscreen bathymetry render
+let drillTimer=null;      // non-host: resend spot input if host hasn't echoed
+let flashMsg='', flashUntil=0;
+let fx={st:'PICKING',catches:0,biting:false};  // transition memo for alerts/sounds
+function resetFx(){ fx={st:'PICKING',catches:0,biting:false}; }
+function flash(m){ flashMsg=m; flashUntil=Date.now()+1900; }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const el=id=>document.getElementById(id);
@@ -260,148 +373,159 @@ function showErr(id,txt){const e=el(id);e.textContent=txt;e.style.display='block
 function hideErr(id){el(id).style.display='none'}
 
 // ─── Fish / Player constructors ───────────────────────────────────────────────
-function mkFish(nid){
-  const d=FISH_DEFS[0|Math.random()*FISH_DEFS.length];
-  const w=d.minW+Math.random()*(d.maxW-d.minW);
+// Fish belong to ONE player (own water column). depth is in metres (0..bottom).
+function mkFish(nid,bottom,q){
+  const d=pickSpeciesDef(bottom,q||0);
+  const w=d.minW+Math.random()*(d.maxW-d.minW)*(0.55+0.5*(q||0));
+  const frac=d.dz[0]+Math.random()*(d.dz[1]-d.dz[0]);
   return{
-    id:`f${nid}`,...d,
+    id:'f'+nid, type:d.type,name:d.name,color:d.color,speed:d.speed,resistMax:d.resistMax,
     weight:Math.round(w*100)/100,
-    x:Math.random()*380+10,depth:10+Math.random()*80,
-    vx:(Math.random()-.5)*d.speed*2,vd:(Math.random()-.5)*.3,
-    state:'ROAMING',attractMs:0,strikeEnd:0,fleeMs:0,targetPid:null,
+    x:Math.random()*380+10,
+    depth:clamp(frac*bottom,0.4,Math.max(0.6,bottom-0.3)),
+    vx:(Math.random()-.5)*d.speed*2, vd:(Math.random()-.5)*.3,  // vd on a 0..100 scale
+    state:'ROAMING',attractMs:0,strikeEnd:0,fleeMs:0,thr:0,
   };
 }
-function mkPlayer(pid,name,lureX,rPhase){
+function mkPlayer(pid,name,rPhase){
   return{
-    id:pid,name,depth:50,lureX:lureX||200,
-    st:'FISHING',score:0,catches:[],
+    id:pid,name,st:'PICKING',score:0,catches:[],
+    depth:0,spot:null,spotSeq:0,bottomDepth:0,quality:0,
+    fish:[],nid:1,
     prog:0,dmg:0,resist:0,
     jigging:false,reeling:false,hookedId:null,
     reelingPhase:rPhase||Math.random()*Math.PI*2,
-    lastStrikeAt:0,pendingStrike:false,
+    lastStrikeAt:0,pendingStrike:false,lastSpotSeq:0,
   };
+}
+// Place a player on the map: validate, set depth/quality, (re)spawn their fish.
+// `seq` lets the host echo the client's own spotSeq (so DRILLING→FISHING matches).
+function setSpotFor(p,nx,ny,seq){
+  const d=depthAt(nx,ny), q=qualityAt(nx,ny);
+  if(d<1.3||q<=0) return false;
+  p.spot={nx,ny}; p.bottomDepth=Math.max(1.5,d); p.quality=q;
+  p.depth=clamp(p.bottomDepth*0.62,0.3,p.bottomDepth-0.3);
+  p.fish=[]; p.nid=1;
+  const n=nFishFor(q);
+  for(let i=0;i<n;i++) p.fish.push(mkFish(p.nid++,p.bottomDepth,q));
+  p.st='FISHING'; p.hookedId=null; p.prog=0; p.dmg=0; p.resist=0;
+  p.spotSeq=(seq!=null)?seq:(p.spotSeq||0)+1;
+  return true;
 }
 
 // ─── Game tick (HOST only) ────────────────────────────────────────────────────
+// Each player owns their fish population, simulated against ONLY their own lure.
+// This removes the shared per-fish attractMs counter that stopped bites in MP.
 function gameTick(){
   if(!G||G.phase!=='PLAYING') return;
   G.tick++;G.timeLeft-=TICK;
   if(G.timeLeft<=0){endGame();return}
 
   const now=Date.now(), t=G.tick*TICK/1000;
-  const plist=Object.values(G.players);
 
-  // Apply pending strikes
-  for(const p of plist){
-    if(p.pendingStrike&&p.st==='FISHING'){
+  for(const p of Object.values(G.players)){
+    // Apply a pending strike (own fish in the strike window)
+    if(p.pendingStrike){
       p.pendingStrike=false;
-      const f=G.fish.find(f=>f.state==='STRIKE_WINDOW'&&f.targetPid===p.id);
-      if(f){
-        f.state='HOOKED';p.st='REELING';p.hookedId=f.id;p.prog=0;p.dmg=0;
+      if(p.st==='FISHING'){
+        const f=p.fish.find(f=>f.state==='STRIKE_WINDOW');
+        if(f){ f.state='HOOKED'; p.st='REELING'; p.hookedId=f.id; p.prog=0; p.dmg=0; }
       }
     }
-  }
 
-  // Fish AI
-  for(const f of G.fish){
-    if(f.state==='HOOKED') continue;
-    if(f.state==='FLEEING'){
-      f.fleeMs+=TICK;f.x+=f.vx*2;
-      if(f.fleeMs>4000){f.state='ROAMING';f.fleeMs=0;f.targetPid=null;
-        f.x=Math.random()*380+10;f.depth=10+Math.random()*80;}
+    // Reeling
+    if(p.st==='REELING'){
+      const fish=p.fish.find(f=>f.id===p.hookedId);
+      if(!fish){ resetP(p); }
+      else{
+        const r=Math.abs(Math.sin(t*2.5*fish.resistMax+p.reelingPhase))*fish.resistMax
+               +Math.max(0,Math.sin(t*7*fish.resistMax)*.25);
+        p.resist=Math.min(1,r);
+        if(p.reeling){
+          if(p.resist>.72){ p.dmg=Math.min(1,p.dmg+.07); if(p.dmg>=1) doLineBreak(p,fish); }
+          else{ p.dmg=Math.max(0,p.dmg-.015); p.prog=Math.min(1,p.prog+.004+(1-fish.resistMax)*.002); }
+        }else{ p.prog=Math.max(0,p.prog-.001*fish.resistMax); p.dmg=Math.max(0,p.dmg-.008); }
+        if(p.st==='REELING'&&p.prog>=1) doCatch(p,fish);
+      }
       continue;
     }
-    if(f.state==='STRIKE_WINDOW'){
-      if(now>f.strikeEnd){f.state='FLEEING';f.fleeMs=0;f.targetPid=null;
-        f.vx=(Math.random()>.5?1:-1)*f.speed*3;}
-      continue;
-    }
-    if(f.state==='APPROACHING'&&f.targetPid){
-      const p=G.players[f.targetPid];
-      if(!p||p.st!=='FISHING'){f.state='ROAMING';f.attractMs=0;f.targetPid=null;continue}
-      const dx=p.lureX-f.x,dd=p.depth-f.depth,dist=Math.sqrt(dx*dx+dd*dd);
-      if(dist<4){
-        f.state='STRIKE_WINDOW';f.strikeEnd=now+1800;
-        if(f.targetPid===myPid) snd.bite();
-      }else{f.x+=(dx/dist)*f.speed*.9;f.depth+=(dd/dist)*f.speed*.5}
-      continue;
-    }
-    // ROAMING
-    f.x+=f.vx;f.depth+=f.vd;
-    if(f.x<5||f.x>395){f.vx*=-1;f.x=Math.max(5,Math.min(395,f.x))}
-    if(f.depth<5||f.depth>95){f.vd*=-1;f.depth=Math.max(5,Math.min(95,f.depth))}
-    if(Math.random()<.01) f.vx=(Math.random()-.5)*f.speed*2;
-    if(Math.random()<.005) f.vd=(Math.random()-.5)*.3;
-    for(const p of plist){
-      if(p.st!=='FISHING'||!p.jigging||f.targetPid) continue;
-      const dx=p.lureX-f.x,dd=p.depth-f.depth;
-      if(Math.sqrt(dx*dx+dd*dd)<22){
-        f.attractMs+=TICK;
-        if(f.attractMs>800+Math.random()*2000){f.state='APPROACHING';f.targetPid=p.id}
-      }else f.attractMs=0;
+
+    if(p.st!=='FISHING'||!p.spot) continue;
+    const bottom=p.bottomDepth;
+
+    // Top up population to suit this spot's quality
+    const tgt=nFishFor(p.quality);
+    while(p.fish.length<tgt) p.fish.push(mkFish(p.nid++,bottom,p.quality));
+    const attractR=16+p.quality*14;        // better spots draw fish from farther
+
+    for(const f of p.fish){
+      if(f.state==='HOOKED') continue;
+      if(f.state==='FLEEING'){
+        f.fleeMs+=TICK; f.x+=f.vx*2;
+        if(f.fleeMs>3500) Object.assign(f, mkFish(p.nid++,bottom,p.quality));  // respawn fresh
+        continue;
+      }
+      if(f.state==='STRIKE_WINDOW'){
+        if(now>f.strikeEnd){ f.state='FLEEING'; f.fleeMs=0; f.vx=(Math.random()>.5?1:-1)*f.speed*3; }
+        continue;
+      }
+      if(f.state==='APPROACHING'){
+        const dx=LUREX-f.x, ddm=p.depth-f.depth, ndd=ddm/bottom*100, dist=Math.sqrt(dx*dx+ndd*ndd);
+        if(dist<4){ f.state='STRIKE_WINDOW'; f.strikeEnd=now+1900; }
+        else{ f.x+=(dx/dist)*f.speed*.9; f.depth+=(ddm/dist)*f.speed*.5; }
+        continue;
+      }
+      // ROAMING — random walk (vd on 0..100 scale → metres)
+      f.x+=f.vx; f.depth+=f.vd*bottom/100;
+      if(f.x<5||f.x>395){ f.vx*=-1; f.x=clamp(f.x,5,395); }
+      if(f.depth<0.5||f.depth>bottom-0.3){ f.vd*=-1; f.depth=clamp(f.depth,0.5,Math.max(0.6,bottom-0.3)); }
+      if(Math.random()<.01) f.vx=(Math.random()-.5)*f.speed*2;
+      if(Math.random()<.006) f.vd=(Math.random()-.5)*.3;
+      // Attraction — only this player's lure, so nothing foreign resets the counter
+      if(p.jigging){
+        const dx=LUREX-f.x, ndd=(p.depth-f.depth)/bottom*100;
+        if(dx*dx+ndd*ndd<attractR*attractR){
+          if(!f.thr) f.thr=600+Math.random()*1500;     // stable per-bite threshold
+          f.attractMs+=TICK;
+          if(f.attractMs>f.thr*(1.6-p.quality)) f.state='APPROACHING';
+        }else{ f.attractMs=Math.max(0,f.attractMs-TICK*0.5); f.thr=0; }
+      }else{ f.attractMs=Math.max(0,f.attractMs-TICK); f.thr=0; }
     }
   }
 
-  const target=8+plist.length*3;
-  while(G.fish.length<target) G.fish.push(mkFish(G.nid++));
+  // Particles (cosmetic, shared)
+  G.pts=(G.pts||[]).filter(pt=>{ pt.x+=pt.vx; pt.y+=pt.vy; pt.vy+=.12; pt.life-=.025; return pt.life>0; });
 
-  // Reeling
-  for(const p of plist){
-    if(p.st!=='REELING') continue;
-    const fish=G.fish.find(f=>f.id===p.hookedId);
-    if(!fish){resetP(p);continue}
-    const r=Math.abs(Math.sin(t*2.5*fish.resistMax+p.reelingPhase))*fish.resistMax
-           +Math.max(0,Math.sin(t*7*fish.resistMax)*.25);
-    p.resist=Math.min(1,r);
-    if(p.reeling){
-      if(p.resist>.72){
-        p.dmg=Math.min(1,p.dmg+.07);
-        if(p.dmg>=1){doLineBreak(p,fish);continue}
-      }else{p.dmg=Math.max(0,p.dmg-.015);p.prog=Math.min(1,p.prog+.004+(1-fish.resistMax)*.002)}
-    }else{p.prog=Math.max(0,p.prog-.001*fish.resistMax);p.dmg=Math.max(0,p.dmg-.008)}
-    if(p.prog>=1) doCatch(p,fish);
-  }
-
-  G.pts=(G.pts||[]).filter(pt=>{
-    pt.x+=pt.vx;pt.y+=pt.vy;pt.vy+=.12;pt.life-=.025;return pt.life>0;
-  });
-
-  // Push to Firebase every 2 ticks (100 ms) to save writes
   if(db&&roomId&&G.tick%2===0) fbPush();
 }
 
 function resetP(p){p.st='FISHING';p.hookedId=null;p.prog=0;p.dmg=0;p.resist=0}
 
 function doLineBreak(p,fish){
-  resetP(p);fish.state='FLEEING';fish.fleeMs=0;fish.targetPid=null;
+  resetP(p);
+  fish.state='FLEEING';fish.fleeMs=0;
   fish.vx=(Math.random()>.5?1:-1)*fish.speed*3;
-  if(p.id===myPid){hide('al-hooked');alertShow('danger',2500);snd.break();shakeIt()}
+  // alert/sound handled centrally in syncFx()
 }
 function doCatch(p,fish){
   const c={type:fish.type,name:fish.name,weight:fish.weight,color:fish.color};
   p.catches.push(c);
   p.score=Math.round((p.score+fish.weight)*100)/100;
   resetP(p);
-  G.fish=G.fish.filter(f=>f.id!==fish.id);
-  if(p.id===myPid){
-    hide('al-hooked');
-    el('al-catch').textContent=`✅ ${c.name} ${c.weight} kg! Yhteensä: ${p.score} kg`;
-    alertShow('catch',3000);snd.catch();
-  }
-  spawnParts(fish);
+  p.fish=p.fish.filter(f=>f.id!==fish.id);
+  // alert/sound/particles handled centrally in syncFx()
 }
-function spawnParts(fish){
-  const sx=canvas.width/400,x=fish.x*sx,y=dToY(fish.depth,canvas.height);
+function spawnParts(x,y,color){
   if(!G.pts) G.pts=[];
-  for(let i=0;i<12;i++) G.pts.push({x,y,vx:(Math.random()-.5)*5,vy:(Math.random()-.5)*5-2,life:1,color:fish.color});
+  for(let i=0;i<12;i++) G.pts.push({x,y,vx:(Math.random()-.5)*5,vy:(Math.random()-.5)*5-2,life:1,color});
 }
 
 // ─── Game flow ────────────────────────────────────────────────────────────────
 function startSolo(name){
-  amHost=true;roomId=null;myPid='solo';
-  G={phase:'COUNTDOWN',countdown:3,timeLeft:GTIME,tick:0,nid:1,
-     fish:[],players:{solo:mkPlayer('solo',name,200)},pts:[]};
-  for(let i=0;i<12;i++) G.fish.push(mkFish(G.nid++));
+  amHost=true;roomId=null;myPid='solo';resetFx();
+  G={phase:'COUNTDOWN',countdown:3,timeLeft:GTIME,tick:0,
+     players:{solo:mkPlayer('solo',name)},pts:[]};
+  mapOpen=true;                       // valitse pilkkipaikka kartalta ensin
   showScreen('game');startRaf();runCountdown();
 }
 
@@ -423,21 +547,37 @@ function endGame(){
 function resetGame(){
   clearInterval(tickTimer);tickTimer=null;stopRaf();
   if(fbUnlisten){fbUnlisten();fbUnlisten=null}
-  G=null;myPid=null;roomId=null;amHost=false;prevMySt='FISHING';
+  if(drillTimer){clearTimeout(drillTimer);drillTimer=null}
+  G=null;myPid=null;roomId=null;amHost=false;mapOpen=false;resetFx();
   showScreen('menu');
 }
 
 // ─── Firebase ─────────────────────────────────────────────────────────────────
+// Fish wire format uses short keys + rounding to keep pushes small.
+function encFish(arr){
+  return (arr||[]).map(f=>({i:f.id,t:f.type,n:f.name,c:f.color,w:f.weight,
+    x:Math.round(f.x*10)/10,d:Math.round(f.depth*100)/100,s:f.state,r:f.vx>=0?1:-1}));
+}
+function decodeFish(arr){
+  if(!arr) return [];
+  return (Array.isArray(arr)?arr:Object.values(arr)).map(f=>({
+    id:f.i,type:f.t,name:f.n,color:f.c,weight:f.w,x:f.x,depth:f.d,state:f.s,vx:f.r>=0?1:-1,
+  }));
+}
+function scoreOf(p){
+  return {
+    st:p.st,score:p.score,catches:p.catches,
+    prog:p.prog,dmg:p.dmg,resist:p.resist,hookedId:p.hookedId||null,
+    bottomDepth:p.bottomDepth,quality:p.quality,
+    spotNx:p.spot?p.spot.nx:-1,spotNy:p.spot?p.spot.ny:-1,spotSeq:p.spotSeq||0,
+    fish:encFish(p.fish),
+  };
+}
 function fbPush(){
   if(!db||!roomId||!G) return;
   db.ref(`rooms/${roomId}`).update({
     phase:G.phase,countdown:G.countdown,timeLeft:G.timeLeft,tick:G.tick,
-    fish:G.fish,
-    playerScores:Object.fromEntries(Object.entries(G.players).map(([pid,p])=>[pid,{
-      st:p.st,score:p.score,catches:p.catches,
-      prog:p.prog,dmg:p.dmg,resist:p.resist,
-      hookedId:p.hookedId,lureX:p.lureX,
-    }])),
+    playerScores:Object.fromEntries(Object.entries(G.players).map(([pid,p])=>[pid,scoreOf(p)])),
   });
 }
 
@@ -446,6 +586,7 @@ function fbWriteInput(){
   const p=G.players[myPid];if(!p) return;
   db.ref(`rooms/${roomId}/inputs/${myPid}`).set({
     depth:p.depth,jigging:p.jigging,reeling:p.reeling,strikeAt:p.pendingStrike?Date.now():0,
+    spotNx:p.spot?p.spot.nx:-1,spotNy:p.spot?p.spot.ny:-1,spotSeq:p.spotSeq||0,
   });
   p.pendingStrike=false;
 }
@@ -453,16 +594,15 @@ function fbWriteInput(){
 async function createRoom(name,room){
   if(!db){showErr('create-err','Firebase ei ole konfiguroitu — peli toimii vain yksinpelinä.');return}
   roomId=room.toLowerCase().trim().replace(/\s+/g,'-');
-  myPid=uid();amHost=true;
+  myPid=uid();amHost=true;resetFx();
   const rPhase=Math.random()*Math.PI*2;
-  G={phase:'LOBBY',host:myPid,tick:0,timeLeft:GTIME,countdown:3,nid:1,
-     fish:[],pts:[],
-     players:{[myPid]:mkPlayer(myPid,name,200,rPhase)}};
+  G={phase:'LOBBY',host:myPid,tick:0,timeLeft:GTIME,countdown:3,pts:[],
+     players:{[myPid]:mkPlayer(myPid,name,rPhase)}};
   await db.ref(`rooms/${roomId}`).set({
     host:myPid,phase:'LOBBY',tick:0,timeLeft:GTIME,countdown:3,
-    profiles:{[myPid]:{name,lureX:200,rPhase}},
-    inputs:{[myPid]:{depth:50,jigging:false,reeling:false,strikeAt:0}},
-    fish:[],playerScores:{},
+    profiles:{[myPid]:{name,rPhase}},
+    inputs:{[myPid]:{depth:0,jigging:false,reeling:false,strikeAt:0,spotNx:-1,spotNy:-1,spotSeq:0}},
+    playerScores:{},
   });
   listenRoom();
   el('lobby-title').textContent=`Kilpailu: ${room}`;
@@ -478,18 +618,13 @@ async function joinRoom(name,room){
   if(!snap.exists()){showErr('join-err',`Kilpailua "${room}" ei löydy.`);return}
   if(snap.val()!=='LOBBY'){showErr('join-err','Kilpailu on jo käynnissä.');return}
 
-  myPid=uid();amHost=false;
-  const profSnap=await db.ref(`rooms/${roomId}/profiles`).get();
-  const count=profSnap.exists()?Object.keys(profSnap.val()).length:0;
-  const lureX=Math.round(400/(count+2)*(count+1));
+  myPid=uid();amHost=false;resetFx();
   const rPhase=Math.random()*Math.PI*2;
+  await db.ref(`rooms/${roomId}/profiles/${myPid}`).set({name,rPhase});
+  await db.ref(`rooms/${roomId}/inputs/${myPid}`).set({depth:0,jigging:false,reeling:false,strikeAt:0,spotNx:-1,spotNy:-1,spotSeq:0});
 
-  await db.ref(`rooms/${roomId}/profiles/${myPid}`).set({name,lureX,rPhase});
-  await db.ref(`rooms/${roomId}/inputs/${myPid}`).set({depth:50,jigging:false,reeling:false,strikeAt:0});
-
-  G={phase:'LOBBY',host:null,tick:0,timeLeft:GTIME,countdown:3,nid:1,
-     fish:[],pts:[],
-     players:{[myPid]:mkPlayer(myPid,name,lureX,rPhase)}};
+  G={phase:'LOBBY',host:null,tick:0,timeLeft:GTIME,countdown:3,pts:[],
+     players:{[myPid]:mkPlayer(myPid,name,rPhase)}};
 
   listenRoom();
   el('lobby-title').textContent=`Kilpailu: ${room}`;
@@ -506,11 +641,11 @@ function listenRoom(){
     const d=snap.val();
     if(d.host) G.host=d.host;
 
-    // Sync player profiles
+    // Profiles → ensure player objects exist
     if(d.profiles){
       for(const[pid,pr]of Object.entries(d.profiles)){
-        if(!G.players[pid]) G.players[pid]=mkPlayer(pid,pr.name,pr.lureX,pr.rPhase);
-        else{G.players[pid].name=pr.name;G.players[pid].lureX=pr.lureX}
+        if(!G.players[pid]) G.players[pid]=mkPlayer(pid,pr.name,pr.rPhase);
+        else G.players[pid].name=pr.name;
       }
       for(const pid of Object.keys(G.players)){
         if(!d.profiles[pid]) delete G.players[pid];
@@ -518,60 +653,64 @@ function listenRoom(){
     }
 
     if(amHost){
-      // Host: absorb player inputs
+      // Host: absorb player inputs (incl. spot picks)
       if(d.inputs){
         for(const[pid,inp]of Object.entries(d.inputs)){
           if(pid===myPid||!G.players[pid]) continue;
-          G.players[pid].depth=inp.depth;
-          G.players[pid].jigging=inp.jigging;
-          G.players[pid].reeling=inp.reeling;
-          if(inp.strikeAt&&inp.strikeAt>(G.players[pid].lastStrikeAt||0)){
-            G.players[pid].lastStrikeAt=inp.strikeAt;
-            G.players[pid].pendingStrike=true;
+          const pp=G.players[pid];
+          pp.depth=inp.depth; pp.jigging=inp.jigging; pp.reeling=inp.reeling;
+          if(inp.strikeAt&&inp.strikeAt>(pp.lastStrikeAt||0)){ pp.lastStrikeAt=inp.strikeAt; pp.pendingStrike=true; }
+          if((inp.spotSeq||0)>(pp.lastSpotSeq||0) && inp.spotNx>=0 && pp.st!=='REELING'){
+            pp.lastSpotSeq=inp.spotSeq;
+            setSpotFor(pp,inp.spotNx,inp.spotNy,inp.spotSeq);  // echo client's own seq
+            if(db&&roomId) fbPush();                           // propagate now (covers COUNTDOWN)
           }
         }
       }
     }else{
-      // Non-host: absorb authoritative state
+      // Non-host: authoritative phase / time
       if(d.phase!==undefined){
-        const oldPhase=G.phase;G.phase=d.phase;
-        if(d.phase==='PLAYING'&&oldPhase!=='PLAYING'){
-          showScreen('game');startRaf();
-          if(!tickTimer) tickTimer=setInterval(()=>{/* non-host: only local tick for particles */
-            G.pts=(G.pts||[]).filter(pt=>{pt.x+=pt.vx;pt.y+=pt.vy;pt.vy+=.12;pt.life-=.025;return pt.life>0});
+        const old=G.phase; G.phase=d.phase;
+        if((d.phase==='COUNTDOWN'||d.phase==='PLAYING') && old!=='COUNTDOWN' && old!=='PLAYING'){
+          const me=G.players[myPid];
+          if(me){ me.st='PICKING'; me.spot=null; me.fish=[]; me.score=0; me.catches=[];
+                  me.hookedId=null; me.depth=0; me.bottomDepth=0; me.quality=0;
+                  me.spotSeq=0; me.lastSpotSeq=0; me.pendingStrike=false; }
+          resetFx(); mapOpen=true;
+          showScreen('game'); startRaf();
+          if(!tickTimer) tickTimer=setInterval(()=>{ // local particle tick only
+            if(G&&G.pts) G.pts=G.pts.filter(pt=>{pt.x+=pt.vx;pt.y+=pt.vy;pt.vy+=.12;pt.life-=.025;return pt.life>0});
           },TICK);
         }
-        if(d.phase==='COUNTDOWN'&&oldPhase==='LOBBY'){showScreen('game');startRaf()}
-        if(d.phase==='GAME_OVER'){clearInterval(tickTimer);tickTimer=null;stopRaf();buildGameOver();showScreen('gameover')}
+        if(d.phase==='GAME_OVER'){ clearInterval(tickTimer);tickTimer=null;stopRaf();buildGameOver();showScreen('gameover'); }
       }
       if(d.countdown!==undefined) G.countdown=d.countdown;
       if(d.timeLeft!==undefined) G.timeLeft=d.timeLeft;
       if(d.tick!==undefined) G.tick=d.tick;
-      if(d.fish) G.fish=Array.isArray(d.fish)?d.fish:Object.values(d.fish);
 
       if(d.playerScores){
         for(const[pid,sc]of Object.entries(d.playerScores)){
-          if(G.players[pid]) Object.assign(G.players[pid],sc);
+          const pp=G.players[pid]; if(!pp) continue;
+          pp.score=sc.score||0; pp.catches=sc.catches||[];
+          pp.spot=(sc.spotNx>=0)?{nx:sc.spotNx,ny:sc.spotNy}:null;
+          if(pid===myPid){
+            pp.prog=sc.prog||0; pp.dmg=sc.dmg||0; pp.resist=sc.resist||0; pp.hookedId=sc.hookedId||null;
+            pp.bottomDepth=sc.bottomDepth||pp.bottomDepth; pp.quality=sc.quality||pp.quality;
+            if(pp.st==='DRILLING'){
+              // adopt only once the host echoes MY spotSeq with fish ready
+              if((sc.spotSeq||0)===pp.spotSeq && sc.st==='FISHING'){
+                pp.st='FISHING'; pp.fish=decodeFish(sc.fish);
+                if(drillTimer){clearTimeout(drillTimer);drillTimer=null;}
+              }
+            }else{
+              pp.st=sc.st; pp.fish=decodeFish(sc.fish);
+            }
+          }else{
+            pp.st=sc.st; pp.bottomDepth=sc.bottomDepth||0; pp.quality=sc.quality||0;
+          }
         }
       }
-      // Re-apply my own inputs so rendering stays responsive
-      if(d.inputs&&d.inputs[myPid]&&G.players[myPid]){
-        const inp=d.inputs[myPid];
-        G.players[myPid].depth=inp.depth;
-        G.players[myPid].jigging=inp.jigging;
-        G.players[myPid].reeling=inp.reeling;
-      }
-
-      // Non-host alert logic
-      const me=G.players[myPid];
-      if(me){
-        if(prevMySt==='FISHING'&&me.st==='REELING'&&me.hookedId){
-          const f=G.fish.find(f=>f.id===me.hookedId);
-          if(f){el('al-hooked').textContent=`🎣 ${f.name} ${f.weight} kg — KELAA!`;alertShow('hooked',5000);snd.bite()}
-        }
-        if(prevMySt==='REELING'&&me.st==='FISHING') hide('al-hooked');
-        prevMySt=me.st;
-      }
+      // depth/jigging/reeling for me stay purely local (never pushed) → already responsive
     }
 
     // Lobby update
@@ -583,13 +722,20 @@ function listenRoom(){
 
 function hostStartGame(){
   if(!amHost||!G) return;
-  const pids=Object.keys(G.players);
-  pids.forEach((pid,i)=>G.players[pid].lureX=Math.round(400/(pids.length+1)*(i+1)));
-  G.fish=[];G.nid=1;for(let i=0;i<12;i++) G.fish.push(mkFish(G.nid++));
-  G.phase='COUNTDOWN';G.countdown=3;G.pts=[];
+  for(const p of Object.values(G.players)){
+    p.st='PICKING'; p.spot=null; p.fish=[]; p.nid=1; p.score=0; p.catches=[];
+    p.prog=0;p.dmg=0;p.resist=0;p.hookedId=null;p.jigging=false;p.reeling=false;
+    p.depth=0;p.bottomDepth=0;p.quality=0;p.spotSeq=0;p.lastSpotSeq=0;
+    p.lastStrikeAt=0;p.pendingStrike=false;
+  }
+  G.phase='COUNTDOWN';G.countdown=3;G.pts=[];G.tick=0;G.timeLeft=GTIME;
+  resetFx(); mapOpen=true;
 
   if(db&&roomId){
-    db.ref(`rooms/${roomId}`).update({phase:'COUNTDOWN',countdown:3,fish:G.fish});
+    db.ref(`rooms/${roomId}`).update({
+      phase:'COUNTDOWN',countdown:3,timeLeft:GTIME,tick:0,
+      playerScores:Object.fromEntries(Object.entries(G.players).map(([pid,p])=>[pid,scoreOf(p)])),
+    });
     let cd=3;
     const iv=setInterval(()=>{
       cd--;G.countdown=cd;
@@ -630,18 +776,137 @@ function shakeIt(){
 }
 
 const TOP=60,BOT=88;
-function dToY(d,H){return TOP+(d/100)*(H-TOP-BOT)}
+function dToY(d,H,bottom){return TOP+(d/(bottom||1))*(H-TOP-BOT)}
+function niceStep(b){return b<=3?.5:b<=6?1:b<=10?2:b<=15?3:b<=22?4:5}
 function startRaf(){if(rafId) return;const f=()=>{render();rafId=requestAnimationFrame(f)};rafId=requestAnimationFrame(f)}
 function stopRaf(){if(rafId){cancelAnimationFrame(rafId);rafId=null}}
+
+// ── Map (top-down spot selection) ─────────────────────────────────────────────
+function fitMap(W,H){
+  const availW=W-16, availH=H-96; let mw,mh;
+  if(availW/availH>ASPECT){mh=availH;mw=mh*ASPECT}else{mw=availW;mh=mw/ASPECT}
+  return {ox:(W-mw)/2, oy:52+(availH-mh)/2, mw, mh};
+}
+function mapColor(d){
+  if(d<0) return '#37301f';
+  const t=clamp(d/22,0,1), c0=[34,118,138], c1=[3,17,38];
+  return `rgb(${Math.round(c0[0]+(c1[0]-c0[0])*t)},${Math.round(c0[1]+(c1[1]-c0[1])*t)},${Math.round(c0[2]+(c1[2]-c0[2])*t)})`;
+}
+function bandOf(d){return d<0?-1:d<2?0:d<4?1:d<6?2:d<9?3:d<12?4:d<16?5:d<20?6:7}
+function buildMapCache(W,H){
+  const f=fitMap(W,H);
+  const mw=Math.max(2,Math.round(f.mw)), mh=Math.max(2,Math.round(f.mh));
+  const off=document.createElement('canvas'); off.width=mw; off.height=mh;
+  const o=off.getContext('2d');
+  // Depth shading (coarse cells)
+  const step=4;
+  for(let y=0;y<mh;y+=step)for(let x=0;x<mw;x+=step){ o.fillStyle=mapColor(depthAt(x/mw,y/mh)); o.fillRect(x,y,step,step); }
+  // Contour + shoreline lines from a band grid
+  const gx=Math.min(240,Math.round(mw/3)), gy=Math.min(200,Math.round(mh/3)), B=[];
+  for(let j=0;j<=gy;j++){B[j]=[];for(let i=0;i<=gx;i++) B[j][i]=bandOf(depthAt(i/gx,j/gy));}
+  o.strokeStyle='rgba(150,212,238,.32)';o.lineWidth=1;o.beginPath();
+  for(let j=0;j<gy;j++)for(let i=0;i<gx;i++){
+    const b=B[j][i], X=i/gx*mw,Y=j/gy*mh,X1=(i+1)/gx*mw,Y1=(j+1)/gy*mh;
+    if(b>=0&&B[j][i+1]>=0&&B[j][i+1]!==b){o.moveTo(X1,Y);o.lineTo(X1,Y1)}
+    if(b>=0&&B[j+1][i]>=0&&B[j+1][i]!==b){o.moveTo(X,Y1);o.lineTo(X1,Y1)}
+  }
+  o.stroke();
+  o.strokeStyle='rgba(196,176,128,.55)';o.lineWidth=1.2;o.beginPath();
+  for(let j=0;j<gy;j++)for(let i=0;i<gx;i++){
+    const land=B[j][i]<0, X=i/gx*mw,Y=j/gy*mh,X1=(i+1)/gx*mw,Y1=(j+1)/gy*mh;
+    if(land!==(B[j][i+1]<0)){o.moveTo(X1,Y);o.lineTo(X1,Y1)}
+    if(land!==(B[j+1][i]<0)){o.moveTo(X,Y1);o.lineTo(X1,Y1)}
+  }
+  o.stroke();
+  // Names + decorative depth numbers
+  o.textAlign='center';o.textBaseline='middle';
+  for(const ft of FEATURES){ if(!ft.name) continue;
+    o.fillStyle=ft.t==='island'?'rgba(228,214,166,.72)':'rgba(150,205,235,.6)';
+    o.font=ft.t==='island'?'italic 11px system-ui':'10px system-ui';
+    o.fillText(ft.name,ft.x*mw,ft.y*mh);
+  }
+  o.fillStyle='rgba(150,205,235,.5)';o.font='10px system-ui';
+  for(const L of LABELS) o.fillText(L.t,L.x*mw,L.y*mh);
+  mapCache={off,ox:f.ox,oy:f.oy,mw,mh,W,H};
+}
+function renderMap(W,H,me,now){
+  ctx.fillStyle='#04101f';ctx.fillRect(0,0,W,H);
+  if(!mapCache||mapCache.W!==W||mapCache.H!==H) buildMapCache(W,H);
+  const m=mapCache;
+  ctx.drawImage(m.off,m.ox,m.oy);
+  ctx.strokeStyle='rgba(120,180,220,.3)';ctx.lineWidth=1;ctx.strokeRect(m.ox,m.oy,m.mw,m.mh);
+  for(const p of Object.values(G.players)){
+    if(p.id===myPid||!p.spot) continue;
+    const X=m.ox+p.spot.nx*m.mw, Y=m.oy+p.spot.ny*m.mh;
+    ctx.fillStyle='rgba(140,180,220,.7)';ctx.beginPath();ctx.arc(X,Y,4,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(190,215,238,.8)';ctx.font='10px system-ui';ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.fillText(p.name,X,Y-6);
+  }
+  if(me&&me.spot){
+    const X=m.ox+me.spot.nx*m.mw, Y=m.oy+me.spot.ny*m.mh;
+    ctx.strokeStyle='#ffd700';ctx.lineWidth=2.5;
+    ctx.beginPath();ctx.moveTo(X-7,Y-7);ctx.lineTo(X+7,Y+7);ctx.moveTo(X+7,Y-7);ctx.lineTo(X-7,Y+7);ctx.stroke();
+    ctx.beginPath();ctx.arc(X,Y,11,0,Math.PI*2);ctx.stroke();
+  }
+  ctx.fillStyle='#cfe8ff';ctx.font='bold 18px system-ui';ctx.textAlign='center';ctx.textBaseline='top';
+  ctx.fillText('Valitse pilkkipaikka',W/2,12);
+  ctx.fillStyle='rgba(170,200,230,.85)';ctx.font='12px system-ui';ctx.textBaseline='bottom';
+  wrapText('Vihje: parhaat kalapaikat ovat jyrkillä syvänteen reunoilla ja vedenalaisilla matalikoilla (tiheät syvyyskäyrät).',W/2,H-8,Math.min(W-24,560),15);
+  drawFlash(W,H);
+}
+function wrapText(text,cx,cy,maxW,lh){
+  const words=text.split(' ');let line='',lines=[];
+  for(const w of words){const test=line?line+' '+w:w; if(ctx.measureText(test).width>maxW&&line){lines.push(line);line=w}else line=test;}
+  if(line)lines.push(line);
+  ctx.textAlign='center';
+  for(let i=0;i<lines.length;i++) ctx.fillText(lines[i],cx,cy-(lines.length-1-i)*lh);
+}
+function drawCenterMsg(W,H,title,sub){
+  ctx.fillStyle='#cfe8ff';ctx.font='bold 22px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
+  if(title) ctx.fillText(title,W/2,H/2-8);
+  if(sub){ctx.fillStyle='rgba(190,215,235,.92)';ctx.font='14px system-ui';ctx.fillText(sub,W/2,H/2+(title?20:0));}
+}
+function drawFlash(W,H){
+  if(!flashMsg||Date.now()>flashUntil) return;
+  ctx.font='bold 13px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';
+  const w=ctx.measureText(flashMsg).width+28, y=H*0.30;
+  ctx.fillStyle='rgba(0,8,22,.9)';ctx.strokeStyle='#ff9a4a';ctx.lineWidth=2;
+  ctx.beginPath();ctx.rect(W/2-w/2,y-16,w,32);ctx.fill();ctx.stroke();
+  ctx.fillStyle='#ffce9a';ctx.fillText(flashMsg,W/2,y);
+}
+function drawTopBar(W,H,me){
+  if(G.phase==='PLAYING'){
+    const s=Math.max(0,Math.ceil(G.timeLeft/1000));
+    const ts=`${0|s/60}:${String(s%60).padStart(2,'0')}`;
+    ctx.font='bold 20px system-ui';ctx.textAlign='center';ctx.textBaseline='top';
+    ctx.fillStyle=s<30?'#ff4444':'#aaddff';ctx.fillText(ts,W/2,6);
+  }
+  const top3=[...Object.values(G.players)].sort((a,b)=>b.score-a.score).slice(0,3);
+  ctx.font='12px system-ui';ctx.textBaseline='top';
+  top3.forEach((p,i)=>{const medal=i===0?'🥇':i===1?'🥈':'🥉';
+    ctx.fillStyle=i===0?'#ffd700':p.id===myPid?'#aaddff':'#6699bb';ctx.textAlign='right';
+    ctx.fillText(`${medal}${p.name}: ${p.score}kg`,W-8,8+i*17);});
+  if(me&&!top3.find(p=>p.id===myPid)){ctx.fillStyle='#ffd700';ctx.textAlign='right';
+    ctx.fillText(`…${me.name}: ${me.score}kg`,W-8,8+top3.length*17);}
+  if(me&&me.spot&&(me.st==='FISHING'||me.st==='REELING')){
+    ctx.textAlign='left';ctx.textBaseline='top';
+    ctx.fillStyle='rgba(220,235,255,.9)';ctx.font='12px system-ui';
+    ctx.fillText(`Pohja ${Math.round(me.bottomDepth*10)/10} m`,58,9);
+    ctx.fillStyle=qcolor(me.quality);ctx.font='11px system-ui';
+    ctx.fillText(qualityWord(me.quality)+' paikka',58,25);
+  }
+}
 
 function render(){
   if(!G) return;
   const W=canvas.width,H=canvas.height,sx=W/400,now=Date.now();
   const me=G.players[myPid];
+  syncFx();
 
-  // Bite alert: show only when my fish is in strike window
-  const biting=G.fish&&G.fish.find(f=>f.state==='STRIKE_WINDOW'&&f.targetPid===myPid);
-  el('al-bite').classList.toggle('on',!!(biting&&G.phase==='PLAYING'));
+  if(mapOpen){ renderMap(W,H,me,now); return; }
+
+  const hasSpot=me&&me.spot&&me.bottomDepth>0&&(me.st==='FISHING'||me.st==='REELING'||me.st==='DRILLING');
+  const bottom=(me&&me.bottomDepth)||1;
 
   ctx.save();
   ctx.translate(shakeOff.x,shakeOff.y);
@@ -657,131 +922,110 @@ function render(){
 
   // Water
   const wg=ctx.createLinearGradient(0,TOP,0,H-BOT);
-  wg.addColorStop(0,'#082040');wg.addColorStop(1,'#010610');
+  wg.addColorStop(0,'#08385a');wg.addColorStop(1,'#02101f');
   ctx.fillStyle=wg;ctx.fillRect(0,TOP,W,H-TOP-BOT);
 
-  // Depth guides
-  ctx.setLineDash([3,9]);
-  for(let d=20;d<=80;d+=20){
-    const dy=dToY(d,H);
-    ctx.strokeStyle='rgba(80,140,200,.07)';ctx.lineWidth=1;
-    ctx.beginPath();ctx.moveTo(0,dy);ctx.lineTo(W,dy);ctx.stroke();
-    ctx.fillStyle='rgba(80,140,200,.2)';ctx.font='10px system-ui';
-    ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(d+'m',7,dy);
+  if(hasSpot){
+    // Depth guides (metres)
+    ctx.setLineDash([3,9]);
+    const step=niceStep(bottom);
+    for(let dm=step;dm<bottom-0.01;dm+=step){
+      const dy=dToY(dm,H,bottom);
+      ctx.strokeStyle='rgba(80,140,200,.09)';ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(0,dy);ctx.lineTo(W,dy);ctx.stroke();
+      ctx.fillStyle='rgba(90,150,200,.3)';ctx.font='10px system-ui';
+      ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText((Math.round(dm*10)/10)+'m',7,dy);
+    }
+    ctx.setLineDash([]);
+    // Lake bed
+    const by=dToY(bottom,H,bottom);
+    ctx.fillStyle='#2a2114';
+    ctx.beginPath();ctx.moveTo(0,by+3);
+    for(let x=0;x<=W;x+=26) ctx.lineTo(x,by-3-3*Math.sin(x*0.06));
+    ctx.lineTo(W,by+3);ctx.closePath();ctx.fill();
+
+    // Fish (mine only)
+    for(const f of (me.fish||[])){
+      if(f.state==='HOOKED') continue;
+      const fxp=f.x*sx,fy=dToY(f.depth,H,bottom),sz=6+Math.min(f.weight*1.5,15),dir=f.vx>=0?1:-1;
+      ctx.save();ctx.globalAlpha=f.state==='FLEEING'?.38:.85;ctx.translate(fxp,fy);ctx.scale(dir,1);ctx.fillStyle=f.color;
+      ctx.beginPath();ctx.ellipse(0,0,sz,sz*.42,0,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.moveTo(-sz,0);ctx.lineTo(-sz*1.6,-sz*.45);ctx.lineTo(-sz*1.6,sz*.45);ctx.closePath();ctx.fill();
+      ctx.fillStyle='rgba(0,0,0,.65)';ctx.beginPath();ctx.arc(sz*.55,-sz*.12,sz*.12,0,Math.PI*2);ctx.fill();
+      if(f.state==='STRIKE_WINDOW'){ctx.globalAlpha=.6+.4*Math.sin(now*.013);ctx.strokeStyle='#ffd700';ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(0,0,sz+9,0,Math.PI*2);ctx.stroke();}
+      else if(f.state==='APPROACHING'){ctx.globalAlpha=.25+.15*Math.sin(now*.01);ctx.strokeStyle='#88aaff';ctx.lineWidth=1.2;ctx.beginPath();ctx.arc(0,0,sz+5,0,Math.PI*2);ctx.stroke();}
+      ctx.restore();
+      if(f.state==='APPROACHING'||f.state==='STRIKE_WINDOW'){
+        ctx.save();ctx.globalAlpha=f.state==='STRIKE_WINDOW'?1:.65;
+        ctx.fillStyle=f.state==='STRIKE_WINDOW'?'#ffd700':'#aabbdd';
+        ctx.font=f.state==='STRIKE_WINDOW'?'bold 11px system-ui':'10px system-ui';
+        ctx.textAlign='center';ctx.textBaseline='bottom';
+        ctx.fillText(`${f.name} ${f.weight}kg`,fxp,fy-sz-5);ctx.restore();
+      }
+    }
+
+    // My lure / line
+    const lx=LUREX*sx, ly=dToY(me.depth,H,bottom);
+    ctx.beginPath();ctx.moveTo(lx,TOP-2);ctx.lineTo(lx,ly);
+    ctx.strokeStyle='rgba(255,220,60,.88)';ctx.lineWidth=1.8;ctx.stroke();
+    ctx.fillStyle='#ffd700';ctx.font='bold 12px system-ui';ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText(me.name,lx,TOP-14);
+    if(me.st==='REELING'&&me.hookedId){
+      const f=(me.fish||[]).find(f=>f.id===me.hookedId);
+      if(f){const sz=6+Math.min(f.weight*1.5,15);ctx.save();ctx.fillStyle=f.color;ctx.beginPath();ctx.ellipse(lx,ly,sz,sz*.42,0,0,Math.PI*2);ctx.fill();ctx.restore();}
+      drawBars(lx,ly,me,W);
+    }else{
+      ctx.fillStyle='#ffee44';ctx.beginPath();ctx.arc(lx,ly,5,0,Math.PI*2);ctx.fill();
+      if(me.jigging){ctx.save();ctx.globalAlpha=.3+.3*Math.sin(now*.024);ctx.strokeStyle='#ffee44';ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(lx,ly,14,0,Math.PI*2);ctx.stroke();ctx.restore();}
+      ctx.fillStyle='#aaddff';ctx.font='11px system-ui';ctx.textAlign='left';ctx.textBaseline='middle';ctx.fillText(`${Math.round(me.depth*10)/10}m`,lx+9,ly);
+    }
   }
-  ctx.setLineDash([]);
 
-  // Title top-left
-  ctx.fillStyle='rgba(255,255,255,.32)';ctx.font='bold 13px system-ui';
-  ctx.textAlign='left';ctx.textBaseline='top';ctx.fillText('Mummin pilkit',8,6);
+  // Particles
+  for(const pt of(G.pts||[])){ctx.save();ctx.globalAlpha=pt.life;ctx.fillStyle=pt.color;ctx.beginPath();ctx.arc(pt.x,pt.y,3,0,Math.PI*2);ctx.fill();ctx.restore();}
 
-  // Countdown
+  ctx.restore();
+
+  // ── UI overlays (unshaken) ──
   if(G.phase==='COUNTDOWN'){
     ctx.fillStyle='rgba(0,0,0,.62)';ctx.fillRect(0,0,W,H);
     ctx.fillStyle='#fff';ctx.font=`bold ${Math.min(W*.44,145)}px system-ui`;
     ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText(String(Math.max(1,G.countdown)),W/2,H/2);
-    ctx.restore();return;
+    if(!me||!me.spot) drawCenterMsg(W,H,'','🗺️ Valitse pilkkipaikka kartalta');
+    drawFlash(W,H);return;
   }
-
-  // Timer
-  if(G.phase==='PLAYING'){
-    const s=Math.max(0,Math.ceil(G.timeLeft/1000));
-    const ts=`${0|s/60}:${String(s%60).padStart(2,'0')}`;
-    ctx.font='bold 20px system-ui';ctx.textAlign='center';ctx.textBaseline='top';
-    ctx.fillStyle=s<30?'#ff4444':'#aaddff';ctx.fillText(ts,W/2,6);
+  drawTopBar(W,H,me);
+  if(hasSpot&&me.st==='FISHING'){
+    const ix=W-13;
+    ctx.fillStyle='rgba(255,255,255,.07)';ctx.fillRect(ix-3,TOP,6,H-TOP-BOT);
+    ctx.fillStyle='#ffd700';ctx.fillRect(ix-9,dToY(me.depth,H,bottom)-5,18,10);
   }
+  if(me&&(me.st==='PICKING'||!me.spot)) drawCenterMsg(W,H,'🗺️ Valitse pilkkipaikka','Paina yläkulman karttakuvaketta');
+  else if(me&&me.st==='DRILLING') drawCenterMsg(W,H,'🪛 Kairataan reikää…','');
+  drawFlash(W,H);
+}
 
-  // Top 3 (top right, compact)
-  const top3=[...Object.values(G.players)].sort((a,b)=>b.score-a.score).slice(0,3);
-  ctx.font='12px system-ui';ctx.textBaseline='top';
-  top3.forEach((p,i)=>{
-    const medal=i===0?'🥇':i===1?'🥈':'🥉';
-    ctx.fillStyle=i===0?'#ffd700':p.id===myPid?'#aaddff':'#6699bb';
-    ctx.textAlign='right';
-    ctx.fillText(`${medal}${p.name}: ${p.score}kg`,W-8,8+i*17);
-  });
-  if(me&&!top3.find(p=>p.id===myPid)){
-    ctx.fillStyle='#ffd700';ctx.textAlign='right';
-    ctx.fillText(`…${me.name}: ${me.score}kg`,W-8,8+top3.length*17);
+// One transition detector for everyone (host + non-host): bite / hooked / catch / break.
+function syncFx(){
+  const me=G&&G.players&&G.players[myPid]; if(!me){return}
+  const playing=G.phase==='PLAYING';
+  const biting=playing&&me.st==='FISHING'&&!mapOpen&&(me.fish||[]).some(f=>f.state==='STRIKE_WINDOW');
+  el('al-bite').classList.toggle('on',!!biting);
+  if(biting&&!fx.biting) snd.bite();
+  if(fx.st==='FISHING'&&me.st==='REELING'){
+    const f=(me.fish||[]).find(f=>f.id===me.hookedId);
+    el('al-hooked').textContent=f?`🎣 ${f.name} ${f.weight} kg — KELAA!`:'🎣 KELAA!';
+    alertShow('hooked',5000);
   }
-
-  // Fish
-  for(const f of G.fish){
-    if(f.state==='HOOKED') continue;
-    const fx=f.x*sx,fy=dToY(f.depth,H),sz=6+Math.min(f.weight*1.5,15);
-    const dir=f.vx>=0?1:-1;
-    ctx.save();
-    ctx.globalAlpha=f.state==='FLEEING'?.38:.85;
-    ctx.translate(fx,fy);ctx.scale(dir,1);
-    ctx.fillStyle=f.color;
-    ctx.beginPath();ctx.ellipse(0,0,sz,sz*.42,0,0,Math.PI*2);ctx.fill();
-    ctx.beginPath();ctx.moveTo(-sz,0);ctx.lineTo(-sz*1.6,-sz*.45);ctx.lineTo(-sz*1.6,sz*.45);ctx.closePath();ctx.fill();
-    ctx.fillStyle='rgba(0,0,0,.65)';ctx.beginPath();ctx.arc(sz*.55,-sz*.12,sz*.12,0,Math.PI*2);ctx.fill();
-    if(f.state==='STRIKE_WINDOW'){
-      ctx.globalAlpha=.6+.4*Math.sin(now*.013);ctx.strokeStyle='#ffd700';ctx.lineWidth=2.5;
-      ctx.beginPath();ctx.arc(0,0,sz+9,0,Math.PI*2);ctx.stroke();
-    }else if(f.state==='APPROACHING'){
-      ctx.globalAlpha=.25+.15*Math.sin(now*.01);ctx.strokeStyle='#88aaff';ctx.lineWidth=1.2;
-      ctx.beginPath();ctx.arc(0,0,sz+5,0,Math.PI*2);ctx.stroke();
-    }
-    ctx.restore();
-    if(f.state==='APPROACHING'||f.state==='STRIKE_WINDOW'){
-      ctx.save();ctx.globalAlpha=f.state==='STRIKE_WINDOW'?1:.65;
-      ctx.fillStyle=f.state==='STRIKE_WINDOW'?'#ffd700':'#aabbdd';
-      ctx.font=f.state==='STRIKE_WINDOW'?'bold 11px system-ui':'10px system-ui';
-      ctx.textAlign='center';ctx.textBaseline='bottom';
-      ctx.fillText(`${f.name} ${f.weight}kg`,fx,fy-sz-5);ctx.restore();
-    }
+  const clen=me.catches?me.catches.length:0;
+  if(clen>fx.catches){
+    const c=me.catches[clen-1];
+    if(c){hide('al-hooked');el('al-catch').textContent=`✅ ${c.name} ${c.weight} kg! Yhteensä: ${me.score} kg`;alertShow('catch',3000);snd.catch();
+      spawnParts(LUREX*(canvas.width/400),dToY(me.depth,canvas.height,me.bottomDepth||1),c.color);}
+  }else if(fx.st==='REELING'&&me.st==='FISHING'){
+    hide('al-hooked');alertShow('danger',2500);snd.break();shakeIt();
   }
-
-  // Players
-  for(const p of Object.values(G.players)){
-    const isMe=p.id===myPid,lx=p.lureX*sx,ly=dToY(p.depth,H);
-    ctx.beginPath();ctx.moveTo(lx,TOP-2);ctx.lineTo(lx,ly);
-    ctx.strokeStyle=isMe?'rgba(255,220,60,.88)':'rgba(100,180,255,.35)';
-    ctx.lineWidth=isMe?1.8:1;ctx.stroke();
-    ctx.fillStyle=isMe?'#ffd700':'#5588aa';
-    ctx.font=isMe?'bold 12px system-ui':'11px system-ui';
-    ctx.textAlign='center';ctx.textBaseline='bottom';ctx.fillText(p.name,lx,TOP-14);
-
-    if(p.st==='REELING'&&p.hookedId){
-      const f=G.fish.find(f=>f.id===p.hookedId);
-      if(f){
-        const sz=6+Math.min(f.weight*1.5,15);
-        ctx.save();ctx.fillStyle=f.color;
-        ctx.beginPath();ctx.ellipse(lx,ly,sz,sz*.42,0,0,Math.PI*2);ctx.fill();ctx.restore();
-      }
-      if(isMe&&me) drawBars(lx,ly,me,W);
-    }else{
-      ctx.fillStyle=isMe?'#ffee44':'#88bbdd';
-      ctx.beginPath();ctx.arc(lx,ly,5,0,Math.PI*2);ctx.fill();
-      if(p.jigging){
-        ctx.save();ctx.globalAlpha=.3+.3*Math.sin(now*.024);
-        ctx.strokeStyle=isMe?'#ffee44':'#88bbdd';ctx.lineWidth=1.5;
-        ctx.beginPath();ctx.arc(lx,ly,14,0,Math.PI*2);ctx.stroke();ctx.restore();
-      }
-      if(isMe){
-        ctx.fillStyle='#aaddff';ctx.font='11px system-ui';
-        ctx.textAlign='left';ctx.textBaseline='middle';
-        ctx.fillText(`${Math.round(p.depth)}m`,lx+9,ly);
-      }
-    }
-  }
-
-  // Depth bar
-  if(me&&me.st!=='REELING'){
-    const ix=W-13;ctx.fillStyle='rgba(255,255,255,.07)';ctx.fillRect(ix-3,TOP,6,H-TOP-BOT);
-    ctx.fillStyle='#ffd700';ctx.fillRect(ix-9,dToY(me.depth,H)-5,18,10);
-  }
-
-  // Particles
-  for(const pt of(G.pts||[])){
-    ctx.save();ctx.globalAlpha=pt.life;ctx.fillStyle=pt.color;
-    ctx.beginPath();ctx.arc(pt.x,pt.y,3,0,Math.PI*2);ctx.fill();ctx.restore();
-  }
-
-  ctx.restore();
+  fx.st=me.st; fx.catches=clen; fx.biting=!!biting;
 }
 
 function drawBars(x,y,me,W){
@@ -833,23 +1077,17 @@ function buildGameOver(){
 
 // ─── Player actions ───────────────────────────────────────────────────────────
 function doStrike(){
-  if(!G||G.phase!=='PLAYING') return;
+  if(!G||G.phase!=='PLAYING'||mapOpen) return;
   const p=G.players[myPid];if(!p||p.st!=='FISHING') return;
   if(amHost){
-    const f=G.fish.find(f=>f.state==='STRIKE_WINDOW'&&f.targetPid===myPid);
-    if(f){
-      f.state='HOOKED';p.st='REELING';p.hookedId=f.id;p.prog=0;p.dmg=0;
-      hide('al-bite');
-      el('al-hooked').textContent=`🎣 ${f.name} ${f.weight} kg — KELAA!`;
-      alertShow('hooked',5000);
-    }
+    const f=p.fish.find(f=>f.state==='STRIKE_WINDOW');
+    if(f){ f.state='HOOKED'; p.st='REELING'; p.hookedId=f.id; p.prog=0; p.dmg=0; }
   }else{
-    p.pendingStrike=true;fbWriteInput();
-    hide('al-bite');
+    p.pendingStrike=true; fbWriteInput();
   }
 }
 function setJig(on){
-  if(!G||G.phase!=='PLAYING') return;
+  if(!G||G.phase!=='PLAYING'||mapOpen) return;
   const p=G.players[myPid];if(!p||p.st!=='FISHING') return;
   if(on===p.jigging) return;
   p.jigging=on;el('cb-jig').classList.toggle('on',on);
@@ -862,11 +1100,45 @@ function setReel(on){
   p.reeling=on;
   if(db&&roomId) fbWriteInput();
 }
-function doDepth(d){
-  if(!G||G.phase!=='PLAYING') return;
+function doDepth(frac){
+  if(!G||G.phase!=='PLAYING'||mapOpen) return;
   const p=G.players[myPid];if(!p||p.st!=='FISHING') return;
-  p.depth=Math.max(0,Math.min(100,p.depth+d));
+  const b=p.bottomDepth||1;
+  p.depth=clamp(p.depth+frac*b,0,b);             // frac = fraction of bottom depth
   if(db&&roomId) fbWriteInput();
+}
+
+// Pick a fishing spot from the map (host applies instantly; non-host drills & waits)
+function selectSpot(nx,ny){
+  if(!G) return;
+  const me=G.players[myPid]; if(!me) return;
+  const d=depthAt(nx,ny), q=qualityAt(nx,ny);
+  if(d<1.3||q<=0){ flash('Liian matalaa tai maata — valitse syvemmältä'); return; }
+  if(me.st==='REELING'){ flash('Et voi vaihtaa paikkaa kelatessa'); return; }
+  if(amHost){
+    setSpotFor(me,nx,ny);
+    if(db&&roomId) fbPush();
+  }else{
+    me.spot={nx,ny}; me.bottomDepth=Math.max(1.5,d); me.quality=q;
+    me.depth=clamp(me.bottomDepth*0.62,0.3,me.bottomDepth-0.3);
+    me.fish=[]; me.st='DRILLING'; me.spotSeq=(me.spotSeq||0)+1;
+    fbWriteInput();
+    if(drillTimer) clearTimeout(drillTimer);
+    drillTimer=setTimeout(()=>{ if(G&&G.players[myPid]&&G.players[myPid].st==='DRILLING') fbWriteInput(); },2000);
+  }
+  mapOpen=false;
+}
+function toggleMap(){
+  if(!G||(G.phase!=='PLAYING'&&G.phase!=='COUNTDOWN')) return;
+  const me=G.players[myPid]; if(!me) return;
+  if(me.st==='REELING'){ flash('Et voi vaihtaa paikkaa kelatessa'); return; }
+  if(mapOpen){ if(me.spot) mapOpen=false; } else mapOpen=true;
+}
+function handleMapTap(cx,cy){
+  if(!mapCache) return;
+  const nx=(cx-mapCache.ox)/mapCache.mw, ny=(cy-mapCache.oy)/mapCache.mh;
+  if(nx<0||nx>1||ny<0||ny>1) return;
+  selectSpot(nx,ny);
 }
 
 // ─── Controls ─────────────────────────────────────────────────────────────────
@@ -874,11 +1146,12 @@ const held=new Set();
 addEventListener('keydown',e=>{
   if(held.has(e.code)) return;held.add(e.code);
   switch(e.code){
-    case 'ArrowUp':  case 'KeyW': doDepth(-5);depthInt=setInterval(()=>doDepth(-3),160);break;
-    case 'ArrowDown':case 'KeyS': doDepth(5); depthInt=setInterval(()=>doDepth(3), 160);break;
+    case 'ArrowUp':  case 'KeyW': doDepth(-0.05);depthInt=setInterval(()=>doDepth(-0.03),160);break;
+    case 'ArrowDown':case 'KeyS': doDepth(0.05); depthInt=setInterval(()=>doDepth(0.03), 160);break;
     case 'Space':case 'KeyX': e.preventDefault();doStrike();break;
     case 'KeyR':case 'ShiftLeft':case 'ShiftRight': setReel(true);break;
     case 'KeyJ': setJig(true);break;
+    case 'KeyM': e.preventDefault();toggleMap();break;
   }
 });
 addEventListener('keyup',e=>{
@@ -890,25 +1163,35 @@ addEventListener('keyup',e=>{
   }
 });
 
-function btnDepth(id,d){
+function btnDepth(id,frac){
   const b=el(id);
-  b.addEventListener('pointerdown',e=>{e.preventDefault();doDepth(d);depthInt=setInterval(()=>doDepth(d>0?3:-3),160)});
+  b.addEventListener('pointerdown',e=>{e.preventDefault();doDepth(frac);depthInt=setInterval(()=>doDepth(frac>0?0.03:-0.03),160)});
   ['pointerup','pointercancel'].forEach(ev=>b.addEventListener(ev,()=>clearInterval(depthInt)));
 }
-btnDepth('cb-up',-5);btnDepth('cb-down',5);
+btnDepth('cb-up',-0.05);btnDepth('cb-down',0.05);
 el('cb-reel').addEventListener('pointerdown',e=>{e.preventDefault();setReel(true)});
 ['pointerup','pointercancel'].forEach(ev=>el('cb-reel').addEventListener(ev,()=>setReel(false)));
 el('cb-jig').addEventListener('pointerdown',e=>{e.preventDefault();setJig(true)});
 ['pointerup','pointercancel'].forEach(ev=>el('cb-jig').addEventListener(ev,()=>setJig(false)));
 
+// Map button (top-left): open/close spot selection
+el('cb-mapbtn').addEventListener('pointerdown',e=>{e.preventDefault();toggleMap()});
+
 // Bite alert: tap = strike
 el('al-bite').addEventListener('pointerdown',e=>{e.preventDefault();doStrike()});
 
-// Canvas hold = jig
-let pAt=0,jigHold=null;
-canvas.addEventListener('pointerdown',e=>{e.preventDefault();pAt=Date.now();jigHold=setTimeout(()=>setJig(true),220)});
-canvas.addEventListener('pointerup',()=>{if(Date.now()-pAt<220){clearTimeout(jigHold)}else setJig(false)});
-canvas.addEventListener('pointercancel',()=>{clearTimeout(jigHold);setJig(false)});
+// Canvas: map mode → tap selects a spot; otherwise hold = jig
+let pAt=0,jigHold=null,mapDown=false;
+canvas.addEventListener('pointerdown',e=>{
+  e.preventDefault();
+  if(mapOpen){ mapDown=true; return; }
+  pAt=Date.now();jigHold=setTimeout(()=>setJig(true),220);
+});
+canvas.addEventListener('pointerup',e=>{
+  if(mapOpen){ if(mapDown){mapDown=false;handleMapTap(e.clientX,e.clientY);} return; }
+  if(Date.now()-pAt<220){clearTimeout(jigHold)}else setJig(false);
+});
+canvas.addEventListener('pointercancel',()=>{ if(mapOpen){mapDown=false;return;} clearTimeout(jigHold);setJig(false) });
 
 // Motion
 const isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent);
